@@ -1,8 +1,3 @@
-Here is the updated script. I have added the example to the main description and included a visual sample of what the CSV should look like inside the help dropdown. 
-
-Replace your `app.py` with this:
-
-```python
 import streamlit as st
 import pandas as pd
 
@@ -79,4 +74,3 @@ if uploaded_file is not None:
             
     except Exception as e:
         st.error(f"Error processing file. Please ensure it is the correct Jira export format. Details: {e}")
-```

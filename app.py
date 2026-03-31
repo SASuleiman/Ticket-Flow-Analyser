@@ -53,7 +53,9 @@ if uploaded_file is not None:
     try:
         # Load and parse data
         df = pd.read_csv(uploaded_file)
-        df['Date of change'] = pd.to_datetime(df['Date of change'])
+        
+        # --- FIX APPLIED HERE ---
+        df['Date of change'] = pd.to_datetime(df['Date of change'].str.replace('Sept', 'Sep'), format='mixed', dayfirst=True)
         
         # Calculate durations per ticket
         ticket_times = df.groupby('Key')['Date of change'].agg(['min', 'max'])

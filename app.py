@@ -7,9 +7,9 @@ st.title("Ticket SLA Analyzer")
 
 # 1. Quick Explanation & Example
 st.markdown("""
-**What this tool does:** It analyzes your Jira ticket history to determine how many tickets took more than 24 hours from their first logged status change to their last.
+**What this tool does:** It analyzes your Jira ticket history to determine how many tickets met or breached your Service Level Agreement (SLA).
 
-**Example:** If ticket DG-105 was moved to *"In Development"* on Monday at 9:00 AM, and finally reached *"Deployment in Progress"* on Tuesday at 10:30 AM, the total time is 25.5 hours. The tool will flag this ticket as exceeding the 24-hour SLA.
+**Example:** If a ticket was moved to *"In Development"* on Monday at 9:00 AM, and finally reached *"Deployment in Progress"* on Tuesday at 10:30 AM, the total time is 25.5 hours. If your SLA is set to 24 hours, the tool will flag this ticket as a breach.
 """)
 
 # 2. Quick Guide & CSV Sample (Hidden in a drop-down)
@@ -35,7 +35,18 @@ with st.expander("Need help exporting your CSV from Jira?"):
 
 st.divider()
 
-# File uploader
+# 3. Dynamic SLA Input
+st.subheader("1. Define Your SLA")
+sla_hours = st.number_input(
+    "Enter your SLA limit (in hours):", 
+    min_value=1.0, 
+    value=24.0, 
+    step=1.0, 
+    help="For example, enter 24 for a 24-hour SLA, or 48 for a 48-hour SLA."
+)
+
+# 4. File uploader
+st.subheader("2. Upload Ticket Data")
 uploaded_file = st.file_uploader("Upload your Jira CSV export", type=['csv'])
 
 if uploaded_file is not None:
@@ -48,27 +59,30 @@ if uploaded_file is not None:
         ticket_times = df.groupby('Key')['Date of change'].agg(['min', 'max'])
         ticket_times['duration'] = ticket_times['max'] - ticket_times['min']
         
-        # Compute metrics
-        over_24h_mask = ticket_times['duration'] > pd.Timedelta(hours=24)
-        over_24h_count = over_24h_mask.sum()
+        # Compute metrics based on custom SLA input
+        over_sla_mask = ticket_times['duration'] > pd.Timedelta(hours=sla_hours)
+        over_sla_count = over_sla_mask.sum()
         total_tickets = len(ticket_times)
-        within_sla = total_tickets - over_24h_count
-        percentage = (over_24h_count / total_tickets) * 100 if total_tickets > 0 else 0
+        within_sla_count = total_tickets - over_sla_count
         
-        # 3. Expanded Breakdown
+        over_sla_rate = (over_sla_count / total_tickets) * 100 if total_tickets > 0 else 0
+        within_sla_rate = (within_sla_count / total_tickets) * 100 if total_tickets > 0 else 0
+        
+        # 5. Expanded Breakdown
         st.success("Analysis Complete!")
         
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Total Tickets", total_tickets)
-        col2.metric("Tickets ≤ 24h", within_sla)
-        col3.metric("Tickets > 24h", over_24h_count)
-        col4.metric("Over 24h Rate", f"{percentage:.2f}%")
+        col2.metric(f"Tickets ≤ {sla_hours}h", within_sla_count)
+        col3.metric(f"Tickets > {sla_hours}h", over_sla_count)
+        col4.metric("Within SLA Rate", f"{within_sla_rate:.2f}%")
+        col5.metric("Over SLA Rate", f"{over_sla_rate:.2f}%")
 
         # Show the actual tickets that failed the SLA
-        if over_24h_count > 0:
-            st.subheader("⚠️ Tickets exceeding 24 hours")
+        if over_sla_count > 0:
+            st.subheader(f"⚠️ Tickets exceeding {sla_hours} hours")
             # Filter to only the breached tickets and format the duration for readability
-            breached_tickets = ticket_times[over_24h_mask].copy()
+            breached_tickets = ticket_times[over_sla_mask].copy()
             breached_tickets['duration'] = breached_tickets['duration'].astype(str)
             st.dataframe(breached_tickets[['duration']], use_container_width=True)
             

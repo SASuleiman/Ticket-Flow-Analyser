@@ -24,7 +24,6 @@ with st.expander("Need help exporting your CSV from Jira?"):
     
     st.markdown("**Sample Expected CSV Format:**\n*(Ensure your export includes at least the 'Key' and 'Date of change' columns)*")
     
-    # Visual sample of the expected CSV
     sample_data = {
         "Date of change": ["02 Feb 2026, 10:47:38", "02 Feb 2026, 10:49:09", "02 Feb 2026, 10:47:39"],
         "Key": ["DG-3", "DG-3", "DG-4"],
@@ -45,23 +44,34 @@ sla_hours = st.number_input(
     help="For example, enter 24 for a 24-hour SLA, or 48 for a 48-hour SLA."
 )
 
-# 4. File uploader
+# 4. File Upload Configuration
 st.subheader("2. Upload Ticket Data")
-uploaded_file = st.file_uploader("Upload your Jira CSV export", type=['csv'])
+has_multiple = st.radio("Do you have more than one CSV sheet to upload?", ["No, just one", "Yes, multiple"])
 
-if uploaded_file is not None:
-    try:
-        # Load and parse data
-        df = pd.read_csv(uploaded_file)
+allowed_files = 1
+if has_multiple == "Yes, multiple":
+    allowed_files = st.number_input("How many sheets do you want to upload? (Maximum is 4)", min_value=2, max_value=4, value=2)
+
+uploaded_files = st.file_uploader(f"Upload up to {allowed_files} CSV file(s)", type=['csv'], accept_multiple_files=True)
+
+if uploaded_files:
+    if len(uploaded_files) > allowed_files:
+        st.warning(f"You uploaded {len(uploaded_files)} files, but selected a limit of {allowed_files}. Only the first {allowed_files} will be processed.")
+        uploaded_files = uploaded_files[:allowed_files]
         
-        # --- FIX APPLIED HERE ---
+    try:
+        # Load and combine all uploaded data
+        dfs = [pd.read_csv(file) for file in uploaded_files]
+        df = pd.concat(dfs, ignore_index=True)
+        
+        # Apply date fix and parse
         df['Date of change'] = pd.to_datetime(df['Date of change'].str.replace('Sept', 'Sep'), format='mixed', dayfirst=True)
         
         # Calculate durations per ticket
         ticket_times = df.groupby('Key')['Date of change'].agg(['min', 'max'])
         ticket_times['duration'] = ticket_times['max'] - ticket_times['min']
         
-        # Compute metrics based on custom SLA input
+        # Compute metrics
         over_sla_mask = ticket_times['duration'] > pd.Timedelta(hours=sla_hours)
         over_sla_count = over_sla_mask.sum()
         total_tickets = len(ticket_times)
@@ -74,7 +84,7 @@ if uploaded_file is not None:
         st.success("Analysis Complete!")
         
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Total Tickets", total_tickets)
+        col1.metric("Total Unique Tickets", total_tickets)
         col2.metric(f"Tickets ≤ {sla_hours}h", within_sla_count)
         col3.metric(f"Tickets > {sla_hours}h", over_sla_count)
         col4.metric("Within SLA Rate", f"{within_sla_rate:.2f}%")
@@ -83,10 +93,9 @@ if uploaded_file is not None:
         # Show the actual tickets that failed the SLA
         if over_sla_count > 0:
             st.subheader(f"⚠️ Tickets exceeding {sla_hours} hours")
-            # Filter to only the breached tickets and format the duration for readability
             breached_tickets = ticket_times[over_sla_mask].copy()
             breached_tickets['duration'] = breached_tickets['duration'].astype(str)
             st.dataframe(breached_tickets[['duration']], use_container_width=True)
             
     except Exception as e:
-        st.error(f"Error processing file. Please ensure it is the correct Jira export format. Details: {e}")
+        st.error(f"Error processing files. Please ensure they are the correct Jira export format. Details: {e}")

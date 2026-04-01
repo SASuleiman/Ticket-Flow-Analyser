@@ -3,16 +3,13 @@ import pandas as pd
 
 # Set up the page
 st.set_page_config(page_title="Ticket SLA Analyzer", layout="wide")
-st.title("Ticket SLA Analyzer")
+st.title("Ticket SLA Analyzer Dashboard")
 
-# 1. Quick Explanation & Example
+# 1. Quick Explanation
 st.markdown("""
 **What this tool does:** It analyzes your Jira ticket history to determine how many tickets met or breached your Service Level Agreement (SLA).
-
-**Example:** If a ticket was moved to *"In Development"* on Monday at 9:00 AM, and finally reached *"Deployment in Progress"* on Tuesday at 10:30 AM, the total time is 25.5 hours. If your SLA is set to 24 hours, the tool will flag this ticket as a breach.
 """)
 
-# 2. Quick Guide & CSV Sample (Hidden in a drop-down)
 with st.expander("Need help exporting your CSV from Jira?"):
     st.markdown("""
     1. Go to your Jira board or the **Issues** search page.
@@ -21,54 +18,37 @@ with st.expander("Need help exporting your CSV from Jira?"):
     4. Select **Export Excel CSV (all fields)**. 
     5. Upload that downloaded file below.
     """)
-    
-    st.markdown("**Sample Expected CSV Format:**\n*(Ensure your export includes at least the 'Key' and 'Date of change' columns)*")
-    
-    sample_data = {
-        "Date of change": ["02 Feb 2026, 10:47:38", "02 Feb 2026, 10:49:09", "02 Feb 2026, 10:47:39"],
-        "Key": ["DG-3", "DG-3", "DG-4"],
-        "Status": ["TO DO", "CODE/ SECURITY REVIEW", "TO DO"],
-        "Status (Changed)": ["IN DEVELOPMENT", "DEPLOYMENT IN PROGRESS", "IN DEVELOPMENT"]
-    }
-    st.dataframe(pd.DataFrame(sample_data), hide_index=True, use_container_width=True)
 
 st.divider()
 
-# 3. Dynamic SLA Input
-st.subheader("1. Define Your SLA")
-sla_hours = st.number_input(
-    "Enter your SLA limit (in hours):", 
-    min_value=1.0, 
-    value=24.0, 
-    step=1.0, 
-    help="For example, enter 24 for a 24-hour SLA, or 48 for a 48-hour SLA."
+# Sidebar Setup for SLA and Filters
+st.sidebar.header("⚙️ Settings & Filters")
+sla_hours = st.sidebar.number_input(
+    "1. Set SLA limit (Hours):", 
+    min_value=1.0, value=24.0, step=1.0
 )
 
-# 4. Exemptions Input (Interactive Table)
-st.subheader("2. Exemptions (Optional)")
-st.write("Add any ticket keys you want to exclude from the SLA calculation and the reason why. (Click the '+' or empty row to add more).")
-
-# Create an empty dataframe for the user to edit
-exemption_df = pd.DataFrame(columns=["Ticket Key", "Reason for Exemption"])
-edited_exemptions = st.data_editor(exemption_df, num_rows="dynamic", use_container_width=True)
-
-# Extract the keys the user typed in, removing any accidental blank spaces
-exempt_keys = [str(k).strip() for k in edited_exemptions["Ticket Key"].dropna().tolist() if str(k).strip()]
-
-
-# 5. File Upload Configuration
-st.subheader("3. Upload Ticket Data")
-has_multiple = st.radio("Do you have more than one CSV sheet to upload?", ["No, just one", "Yes, multiple"])
+# Main Area Upload
+st.subheader("1. Upload Ticket Data")
+has_multiple = st.radio("Do you have more than one CSV sheet to upload?", ["No, just one", "Yes, multiple"], horizontal=True)
 
 allowed_files = 1
 if has_multiple == "Yes, multiple":
-    allowed_files = st.number_input("How many sheets do you want to upload? (Maximum is 4)", min_value=2, max_value=4, value=2)
+    allowed_files = st.number_input("How many sheets? (Max 4)", min_value=2, max_value=4, value=2)
 
-uploaded_files = st.file_uploader(f"Upload up to {allowed_files} CSV file(s)", type=['csv'], accept_multiple_files=True)
+uploaded_files = st.file_uploader(f"Upload CSV file(s)", type=['csv'], accept_multiple_files=True)
+
+# Exemptions Input
+st.subheader("2. Exemptions (Optional)")
+exemption_df = pd.DataFrame(columns=["Ticket Key", "Reason for Exemption"])
+edited_exemptions = st.data_editor(exemption_df, num_rows="dynamic", use_container_width=True)
+exempt_keys = [str(k).strip() for k in edited_exemptions["Ticket Key"].dropna().tolist() if str(k).strip()]
+
+st.divider()
 
 if uploaded_files:
     if len(uploaded_files) > allowed_files:
-        st.warning(f"You uploaded {len(uploaded_files)} files, but selected a limit of {allowed_files}. Only the first {allowed_files} will be processed.")
+        st.warning(f"Only processing the first {allowed_files} files.")
         uploaded_files = uploaded_files[:allowed_files]
         
     try:
@@ -79,17 +59,34 @@ if uploaded_files:
         # Apply date fix and parse
         df['Date of change'] = pd.to_datetime(df['Date of change'].str.replace('Sept', 'Sep'), format='mixed', dayfirst=True)
         
-        # Calculate durations per ticket
+        # Calculate durations and gather extra ticket info for filtering/export
         ticket_times = df.groupby('Key')['Date of change'].agg(['min', 'max'])
-        ticket_times['duration'] = ticket_times['max'] - ticket_times['min']
+        ticket_times['Duration (Hours)'] = (ticket_times['max'] - ticket_times['min']).dt.total_seconds() / 3600
         
-        # --- APPLY EXEMPTIONS ---
-        # Separate the tickets into valid (for calculation) and exempted
-        valid_tickets = ticket_times[~ticket_times.index.isin(exempt_keys)]
-        exempted_tickets = ticket_times[ticket_times.index.isin(exempt_keys)]
+        # Get Assignee, Type, and Summary for each ticket (taking the first occurrence)
+        ticket_info = df.groupby('Key').first()[['Assignee', 'Issue Type', 'Summary']]
+        tickets_master = ticket_times.join(ticket_info)
         
-        # Compute metrics based ONLY on valid tickets
-        over_sla_mask = valid_tickets['duration'] > pd.Timedelta(hours=sla_hours)
+        # --- INTERACTIVE FILTERS (Sidebar) ---
+        st.sidebar.header("🔍 Drill-Down Filters")
+        
+        assignees = tickets_master['Assignee'].dropna().unique().tolist()
+        selected_assignees = st.sidebar.multiselect("Filter by Assignee", assignees, default=assignees)
+        
+        issue_types = tickets_master['Issue Type'].dropna().unique().tolist()
+        selected_types = st.sidebar.multiselect("Filter by Issue Type", issue_types, default=issue_types)
+        
+        # Apply Filters and Exemptions
+        filtered_tickets = tickets_master[
+            (tickets_master['Assignee'].isin(selected_assignees)) &
+            (tickets_master['Issue Type'].isin(selected_types))
+        ]
+        
+        valid_tickets = filtered_tickets[~filtered_tickets.index.isin(exempt_keys)]
+        exempted_tickets = filtered_tickets[filtered_tickets.index.isin(exempt_keys)]
+        
+        # Compute metrics based on valid, filtered tickets
+        over_sla_mask = valid_tickets['Duration (Hours)'] > sla_hours
         over_sla_count = over_sla_mask.sum()
         total_valid_tickets = len(valid_tickets)
         within_sla_count = total_valid_tickets - over_sla_count
@@ -97,35 +94,50 @@ if uploaded_files:
         over_sla_rate = (over_sla_count / total_valid_tickets) * 100 if total_valid_tickets > 0 else 0
         within_sla_rate = (within_sla_count / total_valid_tickets) * 100 if total_valid_tickets > 0 else 0
         
-        # 6. Expanded Breakdown
-        st.success("Analysis Complete!")
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Evaluated Tickets", total_valid_tickets, help="Total tickets minus exemptions")
+        # --- METRICS DASHBOARD ---
+        st.subheader("📊 Dashboard Results")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Evaluated Tickets", total_valid_tickets)
         col2.metric(f"Tickets ≤ {sla_hours}h", within_sla_count)
         col3.metric(f"Tickets > {sla_hours}h", over_sla_count)
-        col4.metric("Within SLA Rate", f"{within_sla_rate:.2f}%")
-        col5.metric("Exempted Tickets", len(exempted_tickets))
+        col4.metric("SLA Breach Rate", f"{over_sla_rate:.2f}%")
 
-        # Show the actual tickets that failed the SLA
+        # --- VISUAL ANALYTICS & EXPORT ---
         if over_sla_count > 0:
-            st.subheader(f"⚠️ Tickets exceeding {sla_hours} hours")
             breached_tickets = valid_tickets[over_sla_mask].copy()
-            breached_tickets['duration'] = breached_tickets['duration'].astype(str)
-            st.dataframe(breached_tickets[['duration']], use_container_width=True)
+            breached_tickets['Duration (Hours)'] = breached_tickets['Duration (Hours)'].round(2)
             
-        # Show the exempted tickets and their reasons
+            st.divider()
+            col_chart, col_table = st.columns([1, 1.5])
+            
+            with col_chart:
+                st.subheader("📈 Longest Running Tickets")
+                # Bar chart of top 10 worst offenders
+                top_10 = breached_tickets.sort_values('Duration (Hours)', ascending=False).head(10)
+                st.bar_chart(top_10['Duration (Hours)'])
+                
+            with col_table:
+                st.subheader(f"⚠️ SLA Breaches (> {sla_hours} hours)")
+                st.dataframe(breached_tickets[['Duration (Hours)', 'Assignee', 'Issue Type', 'Summary']], use_container_width=True)
+                
+                # ONE-CLICK EXPORT
+                csv_export = breached_tickets.to_csv().encode('utf-8')
+                st.download_button(
+                    label="📥 Download Breached Tickets (CSV)",
+                    data=csv_export,
+                    file_name="sla_breaches_report.csv",
+                    mime="text/csv",
+                )
+            
+        # Show exempted tickets log at the very bottom
         if not exempted_tickets.empty:
+            st.divider()
             st.subheader("🛡️ Exempted Tickets Log")
             exempt_display = exempted_tickets.copy()
-            exempt_display['duration'] = exempt_display['duration'].astype(str)
-            
-            # Map the reasons from the user's input back to the display table
+            exempt_display['Duration (Hours)'] = exempt_display['Duration (Hours)'].round(2)
             reason_map = dict(zip(edited_exemptions["Ticket Key"].str.strip(), edited_exemptions["Reason for Exemption"]))
             exempt_display['Reason'] = exempt_display.index.map(reason_map)
-            
-            # Reorder columns to show Reason next to duration
-            st.dataframe(exempt_display[['duration', 'Reason']], use_container_width=True)
+            st.dataframe(exempt_display[['Duration (Hours)', 'Assignee', 'Reason']], use_container_width=True)
             
     except Exception as e:
         st.error(f"Error processing files. Please ensure they are the correct Jira export format. Details: {e}")

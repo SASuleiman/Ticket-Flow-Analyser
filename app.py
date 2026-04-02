@@ -17,12 +17,21 @@ with st.expander("Need help exporting your CSV from Jira?"):
     3. Click the **Export** icon (usually at the top right).
     4. Select **Export Excel CSV (all fields)**. 
     5. Upload that downloaded file below.
+
+    [🔗 Click here to navigate directly to the Interswitch Issues page on Jira](https://interswitch.atlassian.net/jira/apps/b8361e67-49bc-49c0-846e-cb6f220fd082/afe1f2cb-7969-4b06-b1c0-cd63be89c75b/issue-history)
     """)
 
 st.divider()
 
 # Sidebar Setup for SLA and Filters
 st.sidebar.header("⚙️ Settings & Filters")
+
+# REFRESH BUTTON ADDED HERE
+if st.sidebar.button("🔄 Refresh Dashboard", help="Click to force the dashboard to reload and recalculate."):
+    st.rerun()
+
+st.sidebar.divider()
+
 sla_hours = st.sidebar.number_input(
     "1. Set SLA limit (Hours):", 
     min_value=1.0, value=24.0, step=1.0
@@ -63,8 +72,12 @@ if uploaded_files:
         ticket_times = df.groupby('Key')['Date of change'].agg(['min', 'max'])
         ticket_times['Duration (Hours)'] = (ticket_times['max'] - ticket_times['min']).dt.total_seconds() / 3600
         
-        # Get Assignee, Type, and Summary for each ticket (taking the first occurrence)
-        ticket_info = df.groupby('Key').first()[['Assignee', 'Issue Type', 'Summary']]
+        # Get Assignee, Type, Summary, and Issue URL (if it exists)
+        cols_to_extract = ['Assignee', 'Issue Type', 'Summary']
+        if 'Issue URL' in df.columns:
+            cols_to_extract.append('Issue URL')
+            
+        ticket_info = df.groupby('Key').first()[cols_to_extract]
         tickets_master = ticket_times.join(ticket_info)
         
         # --- INTERACTIVE FILTERS (Sidebar) ---
@@ -97,7 +110,6 @@ if uploaded_files:
         # --- METRICS DASHBOARD ---
         st.subheader("📊 Dashboard Results")
         
-        # ---> FIX: Added the 5th column back for Compliance Rate <---
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Evaluated Tickets", total_valid_tickets)
         col2.metric(f"Tickets ≤ {sla_hours}h", within_sla_count)
@@ -121,7 +133,17 @@ if uploaded_files:
                 
             with col_table:
                 st.subheader(f"⚠️ SLA Breaches (> {sla_hours} hours)")
-                st.dataframe(breached_tickets[['Duration (Hours)', 'Assignee', 'Issue Type', 'Summary']], use_container_width=True)
+                
+                # Setup columns to display, prioritizing the clickable URL if available
+                display_cols = ['Duration (Hours)', 'Assignee', 'Issue Type', 'Summary']
+                if 'Issue URL' in breached_tickets.columns:
+                    display_cols.append('Issue URL')
+                    
+                st.dataframe(
+                    breached_tickets[display_cols], 
+                    use_container_width=True,
+                    column_config={"Issue URL": st.column_config.LinkColumn("Jira Link")} if 'Issue URL' in display_cols else None
+                )
                 
                 # ONE-CLICK EXPORT
                 csv_export = breached_tickets.to_csv().encode('utf-8')
@@ -140,7 +162,16 @@ if uploaded_files:
             exempt_display['Duration (Hours)'] = exempt_display['Duration (Hours)'].round(2)
             reason_map = dict(zip(edited_exemptions["Ticket Key"].str.strip(), edited_exemptions["Reason for Exemption"]))
             exempt_display['Reason'] = exempt_display.index.map(reason_map)
-            st.dataframe(exempt_display[['Duration (Hours)', 'Assignee', 'Reason']], use_container_width=True)
+            
+            display_cols_exempt = ['Duration (Hours)', 'Assignee', 'Reason']
+            if 'Issue URL' in exempt_display.columns:
+                display_cols_exempt.append('Issue URL')
+                
+            st.dataframe(
+                exempt_display[display_cols_exempt], 
+                use_container_width=True,
+                column_config={"Issue URL": st.column_config.LinkColumn("Jira Link")} if 'Issue URL' in display_cols_exempt else None
+            )
             
     except Exception as e:
         st.error(f"Error processing files. Please ensure they are the correct Jira export format. Details: {e}")
